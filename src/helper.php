@@ -1,186 +1,177 @@
 <?php
-// +----------------------------------------------------------------------
-// | thinkphp5 Addons [ WE CAN DO IT JUST THINK IT ]
-// +----------------------------------------------------------------------
-// | Copyright (c) 2016 http://www.zzstudio.net All rights reserved.
-// +----------------------------------------------------------------------
-// | Licensed ( http://www.apache.org/licenses/LICENSE-2.0 )
-// +----------------------------------------------------------------------
-// | Author: Byron Sampson <xiaobo.sun@qq.com>
-// +----------------------------------------------------------------------
+declare(strict_types=1);
 
-use think\App;
-use think\facade\Hook;
-use think\facade\Config;
-use think\Loader;
-use think\facade\Cache;
+use think\facade\Event;
 use think\facade\Route;
+use think\helper\{
+    Str, Arr
+};
 
-// 插件目录
-$appPath = (new App())->getAppPath();
-$addons_path = dirname($appPath) . DIRECTORY_SEPARATOR . 'addons' . DIRECTORY_SEPARATOR;
-Env::set('addons_path', $addons_path);
-// 定义路由
-Route::any('addons/execute/:addon-:control-:action', "\\think\\addons\\Route@execute");
-
-// 如果插件目录不存在则创建
-if (!is_dir($addons_path)) {
-    @mkdir($addons_path, 0777, true);
-}
-
-// 注册类的根命名空间
-Loader::addNamespace('addons', $addons_path);
-
-// 闭包自动识别插件目录配置
-Hook::add('app_init', function () {
-    // 获取开关
-    $autoload = (bool)Config::get('addons.autoload', false);
-    // 非正是返回
-    if (!$autoload) {
-        return;
-    }
-    // 当debug时不缓存配置
-    $config = config('app_debug') ? [] : (array)cache('addons');
-    if (empty($config)) {
-        // 读取插件目录及钩子列表
-        $base = get_class_methods("\\think\\Addons");
-        // 读取插件目录中的php文件
-        foreach (glob(Env::get('addons_path') . '*/*.php') as $addons_file) {
-            // 格式化路径信息
-            $info = pathinfo($addons_file);
-            // 获取插件目录名
-            $name = pathinfo($info['dirname'], PATHINFO_FILENAME);
-            // 找到插件入口文件
-            if (strtolower($info['filename']) == strtolower($name)) {
-                // 读取出所有公共方法
-                $methods = (array)get_class_methods("\\addons\\" . $name . "\\" . $info['filename']);
-                // 跟插件基类方法做比对，得到差异结果
-                $hooks = array_diff($methods, $base);
-                // 循环将钩子方法写入配置中
-                foreach ($hooks as $hook) {
-                    if (!isset($config['hooks'][$hook])) {
-                        $config['hooks'][$hook] = [];
-                    }
-                    // 兼容手动配置项
-                    if (is_string($config['hooks'][$hook])) {
-                        $config['hooks'][$hook] = explode(',', $config['hooks'][$hook]);
-                    }
-                    if (!in_array($name, $config['hooks'][$hook])) {
-                        $config['hooks'][$hook][] = $name;
-                    }
-                }
-            }
-        }
-        cache('addons', $config);
-    }
-    config('addons', $config);
+\think\Console::starting(function (\think\Console $console) {
+    $console->addCommands([
+        'addons:config' => '\\think\\addons\\command\\SendConfig'
+    ]);
 });
 
-// 闭包初始化行为
-Hook::add('action_begin', function () {
-    // 获取系统配置
-    $data = config('app_debug') ? [] : Cache::get('hooks', []);
-    $config = config('addons');
-    $addons = isset($config['hooks']) ? $config['hooks'] : [];
-    if (empty($data)) {
-        // 初始化钩子
-        foreach ($addons as $key => $values) {
-            if (is_string($values)) {
-                $values = explode(',', $values);
+// 插件类库自动载入
+spl_autoload_register(function ($class) {
+
+    $class = ltrim($class, '\\');
+
+    $dir = app()->getRootPath();
+    $namespace = 'addons';
+
+    if (strpos($class, $namespace) === 0) {
+        $class = substr($class, strlen($namespace));
+        $path = '';
+        if (($pos = strripos($class, '\\')) !== false) {
+            $path = str_replace('\\', '/', substr($class, 0, $pos)) . '/';
+            $class = substr($class, $pos + 1);
+        }
+        $path .= str_replace('_', '/', $class) . '.php';
+        $dir .= $namespace . $path;
+
+        if (file_exists($dir)) {
+            include $dir;
+            return true;
+        }
+
+        return false;
+    }
+
+    return false;
+
+});
+
+if (!function_exists('hook')) {
+    /**
+     * 处理插件钩子
+     * @param string $event 钩子名称
+     * @param array|null $params 传入参数
+     * @param bool $once 是否只返回一个结果
+     * @return mixed
+     */
+    function hook($event, $params = null, bool $once = false)
+    {
+        $result = Event::trigger($event, $params, $once);
+
+        return join('', $result);
+    }
+}
+
+if (!function_exists('get_addons_info')) {
+    /**
+     * 读取插件的基础信息
+     * @param string $name 插件名
+     * @return array
+     */
+    function get_addons_info($name)
+    {
+        $addon = get_addons_instance($name);
+        if (!$addon) {
+            return [];
+        }
+
+        return $addon->getInfo();
+    }
+}
+
+if (!function_exists('get_addons_instance')) {
+    /**
+     * 获取插件的单例
+     * @param string $name 插件名
+     * @return mixed|null
+     */
+    function get_addons_instance($name)
+    {
+        static $_addons = [];
+        if (isset($_addons[$name])) {
+            return $_addons[$name];
+        }
+        $class = get_addons_class($name);
+        if (class_exists($class)) {
+            $_addons[$name] = new $class(app());
+
+            return $_addons[$name];
+        } else {
+            return null;
+        }
+    }
+}
+
+if (!function_exists('get_addons_class')) {
+    /**
+     * 获取插件类的类名
+     * @param string $name 插件名
+     * @param string $type 返回命名空间类型
+     * @param string $class 当前类名
+     * @return string
+     */
+    function get_addons_class($name, $type = 'hook', $class = null)
+    {
+        $name = trim($name);
+        // 处理多级控制器情况
+        if (!is_null($class) && strpos($class, '.')) {
+            $class = explode('.', $class);
+
+            $class[count($class) - 1] = Str::studly(end($class));
+            $class = implode('\\', $class);
+        } else {
+            $class = Str::studly(is_null($class) ? $name : $class);
+        }
+        switch ($type) {
+            case 'controller':
+                $namespace = '\\addons\\' . $name . '\\controller\\' . $class;
+                break;
+            default:
+                $namespace = '\\addons\\' . $name . '\\Plugin';
+        }
+
+        return class_exists($namespace) ? $namespace : '';
+    }
+}
+
+if (!function_exists('addons_url')) {
+    /**
+     * 插件显示内容里生成访问插件的url
+     * @param $url
+     * @param array $param
+     * @param bool|string $suffix 生成的URL后缀
+     * @param bool|string $domain 域名
+     * @return bool|string
+     */
+    function addons_url($url = '', $param = [], $suffix = true, $domain = false)
+    {
+        $request = app('request');
+        if (empty($url)) {
+            // 生成 url 模板变量
+            $addons = $request->addon;
+            $controller = $request->controller();
+            $controller = str_replace('/', '.', $controller);
+            $action = $request->action();
+        } else {
+            $url = Str::studly($url);
+            $url = parse_url($url);
+            if (isset($url['scheme'])) {
+                $addons = strtolower($url['scheme']);
+                $controller = $url['host'];
+                $action = trim($url['path'], '/');
             } else {
-                $values = (array)$values;
+                $route = explode('/', $url['path']);
+                $addons = $request->addon;
+                $action = array_pop($route);
+                $controller = array_pop($route) ?: $request->controller();
             }
-            $addons[$key] = array_filter(array_map('get_addon_class', $values));
-            Hook::add($key, $addons[$key]);
+            $controller = Str::snake((string)$controller);
+
+            /* 解析URL带的参数 */
+            if (isset($url['query'])) {
+                parse_str($url['query'], $query);
+                $param = array_merge($query, $param);
+            }
         }
-        cache('hooks', $addons);
-    } else {
-        Hook::import($data, false);
-    }
-});
 
-/**
- * 处理插件钩子
- * @param string $hook 钩子名称
- * @param mixed $params 传入参数
- * @return void
- */
-function hook($hook, $params = [])
-{
-    Hook::listen($hook, $params);
-}
-
-/**
- * 获取插件类的类名
- * @param $name 插件名
- * @param string $type 返回命名空间类型
- * @param string $class 当前类名
- * @return string
- */
-function get_addon_class($name, $type = 'hook', $class = null)
-{
-    $name = Loader::parseName($name);
-    // 处理多级控制器情况
-    if (!is_null($class) && strpos($class, '.')) {
-        $class = explode('.', $class);
-        foreach ($class as $key => $cls) {
-            $class[$key] = Loader::parseName($cls, 1);
-        }
-        $class = implode('\\', $class);
-    } else {
-        $class = Loader::parseName(is_null($class) ? $name : $class, 1);
-    }
-    switch ($type) {
-        case 'controller':
-            $namespace = "\\addons\\" . $name . "\\controller\\" . $class;
-            break;
-        default:
-            $namespace = "\\addons\\" . $name . "\\" . $class;
-    }
-
-    return class_exists($namespace) ? $namespace : '';
-}
-
-/**
- * 获取插件类的配置文件数组
- * @param string $name 插件名
- * @return array
- */
-function get_addon_config($name)
-{
-    $class = get_addon_class($name);
-    if (class_exists($class)) {
-        $addon = new $class();
-        return $addon->getConfig();
-    } else {
-        return [];
+        return Route::buildUrl("@addons/{$addons}/{$controller}/{$action}", $param)->suffix($suffix)->domain($domain);
     }
 }
 
-/**
- * 插件显示内容里生成访问插件的url
- * @param $url
- * @param array $param
- * @return bool|string
- * @param bool|string $suffix 生成的URL后缀
- * @param bool|string $domain 域名
- */
-function addon_url($url, $param = [], $suffix = true, $domain = false)
-{
-    $url = parse_url($url);
-    $case = config('url_convert');
-    $addons = $case ? Loader::parseName($url['scheme']) : $url['scheme'];
-    $controller = $case ? Loader::parseName($url['host']) : $url['host'];
-    $action = trim($case ? strtolower($url['path']) : $url['path'], '/');
-
-    /* 解析URL带的参数 */
-    if (isset($url['query'])) {
-        parse_str($url['query'], $query);
-        $param = array_merge($query, $param);
-    }
-
-    // 生成插件链接新规则
-    $actions = "{$addons}-{$controller}-{$action}";
-
-    return url("addons/execute/{$actions}", $param, $suffix, $domain);
-}
