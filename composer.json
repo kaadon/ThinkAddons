@@ -1,16 +1,17 @@
 {
-    "name": "zz-studio/think-addons",
-    "description": "The ThinkPHP5.1 Addons Package",
-    "license": "Apache-2.0",
-    "authors": [
-        {
-            "name": "byron",
-            "email": "xiaobo.sun@qq.com"
-        }
+    "name": "kaadon/think-addons",
+    "type": "library",
+    "description": "kaadon think-addons for ThinkPhp6.*",
+    "keywords": [
+        "kaadon think-addons",
+        "think_addons",
+        "kaadon"
     ],
-    "minimum-stability": "dev",
     "require": {
-        "topthink/framework": "5.1.*"
+        "php": ">=7.1.0",
+        "topthink/framework": "^6.0.0",
+        "topthink/think-view": "^1.0",
+        "topthink/think-helper": "^3.0.0"
     },
     "autoload": {
         "psr-4": {
@@ -18,6 +19,21 @@
         },
         "files": [
             "src/helper.php"
+        ]
+    },
+    "extra": {
+        "think": {
+            "services": [
+                "think\\addons\\Service"
+            ],
+            "config":{
+                "addons": "src/config.php"
+            }
+        }
+    },
+    "scripts" : {
+        "post-install-cmd": [
+            "php think addons:config"
         ]
     }
 }
